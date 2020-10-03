@@ -8,26 +8,29 @@
 #include <cinttypes>
 #include <memory>
 #include <string>
+#include <optional>
 
 namespace uimg {class ImageBuffer;};
 namespace util::ocio
 {
-	enum class Config : uint8_t
-	{
-		FilmicBlender = 0
-	};
 	class ColorProcessor
 		: public std::enable_shared_from_this<ColorProcessor>
 	{
 	public:
-		static std::shared_ptr<ColorProcessor> Create(Config config,const std::string &configLocation,std::string &outErr);
+		struct CreateInfo
+		{
+			std::string config;
+			std::string configLocation;
+			std::optional<std::string> lookName {};
+		};
+		static std::shared_ptr<ColorProcessor> Create(const CreateInfo &createInfo,std::string &outErr);
 		bool Apply(uimg::ImageBuffer &imgBuf,std::string &outErr,float exposure=0.f,float gamma=2.2f);
 	private:
 		std::shared_ptr<const void> m_ocioContext = nullptr;
 		std::shared_ptr<const void> m_ocioConfig = nullptr;
 		std::shared_ptr<const void> m_ocioProcessor = nullptr;
 	};
-	bool apply_color_transform(uimg::ImageBuffer &imgBuf,Config config,const std::string &configLocation,std::string &outErr,float exposure=0.f,float gamma=2.2f);
+	bool apply_color_transform(uimg::ImageBuffer &imgBuf,const ColorProcessor::CreateInfo &createInfo,std::string &outErr,float exposure=0.f,float gamma=2.2f);
 };
 
 #endif

@@ -22,7 +22,7 @@ namespace OCIO = OCIO_NAMESPACE;
 #include "OpenEXR/half.h"
 
 #pragma optimize("",off)
-std::shared_ptr<util::ocio::ColorProcessor> util::ocio::ColorProcessor::Create(Config configType,const std::string &configLocation,std::string &outErr)
+std::shared_ptr<util::ocio::ColorProcessor> util::ocio::ColorProcessor::Create(const CreateInfo &createInfo,std::string &outErr)
 {
 	auto bitDepth = OCIO::BitDepth::BIT_DEPTH_F32;
 	auto path = util::Path::CreatePath(util::get_program_path());
@@ -34,16 +34,18 @@ std::shared_ptr<util::ocio::ColorProcessor> util::ocio::ColorProcessor::Create(C
 		OCIO::ConstConfigRcPtr config = nullptr;
 		OCIO::ConstProcessorRcPtr processor = nullptr;
 
-		switch(configType)
+		config = OCIO::Config::CreateFromFile((createInfo.configLocation +createInfo.config +"/config.ocio").c_str());
+		if(createInfo.lookName.has_value())
 		{
-		case Config::FilmicBlender:
-			config = OCIO::Config::CreateFromFile((configLocation +"filmic-blender/config.ocio").c_str());
-			processor = config->getProcessor("scene_linear","Filmic sRGB");
-			break;
+			auto look = config->getLook(createInfo.lookName->c_str());
+			if(look)
+				processor = config->getProcessor(look->getTransform());
 		}
 		if(processor == nullptr)
+			processor = config->getProcessor("scene_linear","Filmic sRGB");
+		if(processor == nullptr)
 		{
-			outErr = "Unable to retrieve processor for config type " +std::to_string(umath::to_integral(configType));
+			outErr = "Unable to retrieve processor for config type " +createInfo.config;
 			return false;
 		}
 
@@ -93,9 +95,9 @@ bool util::ocio::ColorProcessor::Apply(uimg::ImageBuffer &imgBuf,std::string &ou
 }
 
 
-bool util::ocio::apply_color_transform(uimg::ImageBuffer &imgBuf,Config configType,const std::string &configLocation,std::string &outErr,float exposure,float gamma)
+bool util::ocio::apply_color_transform(uimg::ImageBuffer &imgBuf,const ColorProcessor::CreateInfo &createInfo,std::string &outErr,float exposure,float gamma)
 {
-	auto processor = ColorProcessor::Create(configType,configLocation,outErr);
+	auto processor = ColorProcessor::Create(createInfo,outErr);
 	if(processor == nullptr)
 		return false;
 	return processor->Apply(imgBuf,outErr,exposure,gamma);
