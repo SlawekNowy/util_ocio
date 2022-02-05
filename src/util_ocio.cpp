@@ -22,17 +22,39 @@ namespace OCIO = OCIO_NAMESPACE;
 #include "OpenEXR/half.h"
 
 #pragma optimize("",off)
-std::shared_ptr<util::ocio::ColorProcessor> util::ocio::ColorProcessor::Create(const CreateInfo &createInfo,std::string &outErr)
+
+struct TransformProcessor
 {
-	auto bitDepth = OCIO::BitDepth::BIT_DEPTH_F32;
+	OCIO::ExposureContrastTransformRcPtr transform = nullptr;
+	OCIO::ConstProcessorRcPtr processor = nullptr;
+	OCIO::ConstCPUProcessorRcPtr cpuProcessor = nullptr;
+};
+
+struct ProcessorData
+{
+	OCIO::ConstConfigRcPtr config = nullptr;
+
+	OCIO::ConstProcessorRcPtr colorTransformProcessor = nullptr;
+	OCIO::ConstCPUProcessorRcPtr colorTransformCpuProcessor = nullptr;
+
+	std::shared_ptr<TransformProcessor> exposureTransform = nullptr;
+	std::shared_ptr<TransformProcessor> gammaTransform = nullptr;
+};
+
+std::shared_ptr<util::ocio::ColorProcessor> util::ocio::ColorProcessor::Create(const CreateInfo &createInfo,std::string &outErr,float exposure,float gamma)
+{
+	auto bitDepth = (createInfo.bitDepth == CreateInfo::BitDepth::Float32) ? OCIO::BitDepth::BIT_DEPTH_F32 :
+		(createInfo.bitDepth == CreateInfo::BitDepth::Float16) ? OCIO::BitDepth::BIT_DEPTH_F16 :
+		OCIO::BitDepth::BIT_DEPTH_UINT8;
 	auto path = util::Path::CreatePath(util::get_program_path());
 	auto context = OCIO::Context::Create();
 	context->addSearchPath((path.GetString() +"modules/open_color_io").c_str());
 	
 	try
 	{
-		OCIO::ConstConfigRcPtr config = nullptr;
-		OCIO::ConstProcessorRcPtr processor = nullptr;
+		auto processorData = std::make_shared<ProcessorData>();
+		auto &config = processorData->config;
+		auto &processor = processorData->colorTransformProcessor;
 
 		config = OCIO::Config::CreateFromFile((createInfo.configLocation +createInfo.config +"/config.ocio").c_str());
 		if(createInfo.lookName.has_value())
@@ -46,14 +68,37 @@ std::shared_ptr<util::ocio::ColorProcessor> util::ocio::ColorProcessor::Create(c
 		if(processor == nullptr)
 		{
 			outErr = "Unable to retrieve processor for config type " +createInfo.config;
-			return false;
+			return nullptr;
+		}
+		processorData->colorTransformCpuProcessor = processor->getOptimizedCPUProcessor(bitDepth,bitDepth,OCIO::OPTIMIZATION_DEFAULT);
+
+		auto createTransformProcessor = [&config,bitDepth](std::shared_ptr<TransformProcessor> &processor,const std::function<void(OCIO::ExposureContrastTransform&)> &init) {
+			processor = std::make_shared<TransformProcessor>();
+			auto t = OCIO::ExposureContrastTransform::Create();
+			init(*t);
+			t->setStyle(OCIO::ExposureContrastStyle::EXPOSURE_CONTRAST_LINEAR);
+			t->setDirection(OCIO::TransformDirection::TRANSFORM_DIR_FORWARD);
+			t->setPivot(1.0);
+
+			processor->transform = t;
+			processor->processor = config->getProcessor(t);
+			processor->cpuProcessor = processor->processor->getOptimizedCPUProcessor(bitDepth,bitDepth,OCIO::OPTIMIZATION_DEFAULT);
+		};
+		if(exposure != 0.f)
+		{
+			createTransformProcessor(processorData->exposureTransform,[exposure](OCIO::ExposureContrastTransform &t) {
+				t.setExposure(exposure);
+			});
+		}
+		if(gamma != 1.f && gamma != 0.f)
+		{
+			createTransformProcessor(processorData->gammaTransform,[gamma](OCIO::ExposureContrastTransform &t) {
+				t.setGamma(1.0 /static_cast<double>(gamma));
+			});
 		}
 
-		auto cpuProcessor  = processor->getOptimizedCPUProcessor(bitDepth,bitDepth,OCIO::OPTIMIZATION_DEFAULT);
 		auto oProcessor = std::shared_ptr<ColorProcessor>{new ColorProcessor{}};
-		oProcessor->m_ocioContext = context;
-		oProcessor->m_ocioConfig = config;
-		oProcessor->m_ocioProcessor = std::static_pointer_cast<const OCIO::CPUProcessor>(cpuProcessor);
+		oProcessor->m_processorData = processorData;
 		return oProcessor;
 	}
 	catch(OCIO::Exception & exception)
@@ -69,17 +114,24 @@ std::shared_ptr<util::ocio::ColorProcessor> util::ocio::ColorProcessor::Create(c
 	// Unreachable
 	return nullptr;
 }
-bool util::ocio::ColorProcessor::Apply(uimg::ImageBuffer &imgBuf,std::string &outErr,float exposure,float gamma)
+bool util::ocio::ColorProcessor::Apply(uimg::ImageBuffer &imgBuf,std::string &outErr)
 {
-	imgBuf.ToFloat();
-	imgBuf.ApplyExposure(exposure);
+	auto bitDepth = imgBuf.IsFloatFormat() ? OCIO::BitDepth::BIT_DEPTH_F32 : imgBuf.IsHDRFormat() ? OCIO::BitDepth::BIT_DEPTH_F16 : OCIO::BitDepth::BIT_DEPTH_UINT8;
+	OCIO::PackedImageDesc img{
+		imgBuf.GetData(),static_cast<long>(imgBuf.GetWidth()),static_cast<long>(imgBuf.GetHeight()),imgBuf.GetChannelCount(),
+		bitDepth,imgBuf.GetChannelSize(),static_cast<ptrdiff_t>(imgBuf.GetPixelStride()),static_cast<ptrdiff_t>(imgBuf.GetPixelStride() *imgBuf.GetWidth())
+	};
 
 	try
 	{
-		OCIO::PackedImageDesc img{imgBuf.GetData(),static_cast<long>(imgBuf.GetWidth()),static_cast<long>(imgBuf.GetHeight()),imgBuf.GetChannelCount()};
-		static_cast<const OCIO::CPUProcessor*>(m_ocioProcessor.get())->apply(img);
+		auto &processorData = *static_cast<ProcessorData*>(m_processorData.get());
+		if(processorData.exposureTransform)
+			processorData.exposureTransform->cpuProcessor->apply(img);
 
-		imgBuf.ApplyGammaCorrection(gamma);
+		processorData.colorTransformCpuProcessor->apply(img);
+
+		if(processorData.gammaTransform)
+			processorData.gammaTransform->cpuProcessor->apply(img);
 	}
 	catch(OCIO::Exception & exception)
 	{
@@ -97,9 +149,9 @@ bool util::ocio::ColorProcessor::Apply(uimg::ImageBuffer &imgBuf,std::string &ou
 
 bool util::ocio::apply_color_transform(uimg::ImageBuffer &imgBuf,const ColorProcessor::CreateInfo &createInfo,std::string &outErr,float exposure,float gamma)
 {
-	auto processor = ColorProcessor::Create(createInfo,outErr);
+	auto processor = ColorProcessor::Create(createInfo,outErr,exposure,gamma);
 	if(processor == nullptr)
 		return false;
-	return processor->Apply(imgBuf,outErr,exposure,gamma);
+	return processor->Apply(imgBuf,outErr);
 }
 #pragma optimize("",on)

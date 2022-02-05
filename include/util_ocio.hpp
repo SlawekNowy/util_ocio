@@ -19,16 +19,21 @@ namespace util::ocio
 	public:
 		struct CreateInfo
 		{
+			enum class BitDepth : uint8_t
+			{
+				Float32 = 0,
+				Float16,
+				UInt8
+			};
 			std::string config;
 			std::string configLocation;
 			std::optional<std::string> lookName {};
+			BitDepth bitDepth = BitDepth::Float32;
 		};
-		static std::shared_ptr<ColorProcessor> Create(const CreateInfo &createInfo,std::string &outErr);
-		bool Apply(uimg::ImageBuffer &imgBuf,std::string &outErr,float exposure=0.f,float gamma=2.2f);
+		static std::shared_ptr<ColorProcessor> Create(const CreateInfo &createInfo,std::string &outErr,float exposure=0.f,float gamma=2.2f);
+		bool Apply(uimg::ImageBuffer &imgBuf,std::string &outErr);
 	private:
-		std::shared_ptr<const void> m_ocioContext = nullptr;
-		std::shared_ptr<const void> m_ocioConfig = nullptr;
-		std::shared_ptr<const void> m_ocioProcessor = nullptr;
+		std::shared_ptr<void> m_processorData = nullptr;
 	};
 	bool apply_color_transform(uimg::ImageBuffer &imgBuf,const ColorProcessor::CreateInfo &createInfo,std::string &outErr,float exposure=0.f,float gamma=2.2f);
 };
