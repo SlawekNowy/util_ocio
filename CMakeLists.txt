@@ -78,7 +78,6 @@ add_external_library(OpenEXR_Imath)
 add_external_library(OpenEXR_IlmImf)
 
 add_definitions(-DUIMG_ENABLE_NVTT)
-add_definitions(-DUIMG_DLL)
 
 add_include_dir(glm)
 add_include_dir(lpng_build)
