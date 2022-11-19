@@ -19,7 +19,6 @@ namespace OCIO = OCIO_NAMESPACE;
 
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/typedesc.h>
-#include "OpenEXR/half.h"
 
 #pragma optimize("",off)
 
