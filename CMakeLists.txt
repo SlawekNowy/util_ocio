@@ -69,7 +69,7 @@ if(WIN32)
 endif()
 add_include_dir(OpenEXR)
 add_include_dir(glm)
-add_include_dir(OpenColorIO_build)
+#add_include_dir(OpenColorIO_build)
 
 add_external_library(OpenEXR_Half)
 add_external_library(OpenEXR_Iex)
